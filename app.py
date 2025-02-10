@@ -1,4 +1,4 @@
-# 時系列アプリ_20250204_push
+# 時系列アプリ_20250210_push
 import os
 import gradio as gr
 
@@ -89,61 +89,78 @@ import tempfile
 from datetime import datetime
 
 
-def preprocess_data(folder, day1, day2, kishu):
+def preprocess_data(folder, day1, day2, type, capacity, num, contact, cmeth, volt):
     file_path = folder.name
     data = pd.read_csv(file_path, encoding="cp932", low_memory=False)
+    # dataのカラムをクリーニング
+    data.columns = data.columns.str.strip()
 
     # 必要なデータ処理
     data['出荷金額'] = data['出荷金額'].str.replace('\\', '', regex=False).astype(float)
     data['単価'] = data['単価'].str.replace('\\', '', regex=False).astype(float)
     data['数量'] = data['数量'].str.replace('\\', '', regex=False).astype('int64')
-    data['出荷数量'] = data['出荷数量'].str.replace('\\', '', regex=False)
-    data['出荷数量'] = data['出荷数量'].fillna(0).astype('int64')
-    data["納期回答日"] = pd.to_datetime(data["納期回答日"])
-    data["弊社回答日"] = pd.to_datetime(data["弊社回答日"])
-    data["受注日"] = pd.to_datetime(data["受注日"])
-    data["出荷日"] = pd.to_datetime(data["出荷日"])
-    data["納期"] = pd.to_datetime(data["納期"], errors="coerce")
-    data.loc[data['容量'].isna()].head()
+    data['出荷数量'] = data['出荷数量'].str.replace('\\', '', regex=False).fillna(0).astype('int64')
+
+    # 日付変換
+    date_cols = ["納期回答日", "弊社回答日", "受注日", "出荷日", "納期"]
+    for col in date_cols:
+        data[col] = pd.to_datetime(data[col], errors="coerce")
+        
     data.loc[data['型式'].isna(), '型式'] = "部品"
     data.loc[data['容量'].isna(), '容量'] = "-"
-    data['機種別'] = data['型式'] + data['容量'].astype(str)
-    '''
-    data['機種極数別'] = data['機種別'] + data['極数'].astype(str)
-    data['機種極構成別'] = data['機種極数別'] + data['接点構成'].astype(str)
-    data['機種PDF別'] = data['機種極構成別'] + data['接続方式'].astype(str)
-    data['機種操作電圧別'] = data['機種別'] + data['操作電圧'].astype(str)
-    '''
-    data_2k = data.copy()
-    data_2k = data_2k.query('得意先コード != 9999').copy()
+
+    # 列の文字列化と空白補完
+    for col in ['型式', '容量', '極数', '接点構成', '接続方式', '操作電圧']:
+        data[col] = data[col].fillna("-").astype(str)
+
+    # フィルタ条件の動的生成
+    query_conditions = [f'納期 >= "{day1}" and 納期 <= "{day2}"']
+    if type:
+        query_conditions.append(f'型式 == "{type}"')
+    if capacity:
+        query_conditions.append(f'容量 == "{capacity}"')
+    if num:
+        query_conditions.append(f'極数 == "{num}"')
+    if contact:
+        query_conditions.append(f'接点構成 == "{contact}"')
+    if cmeth:
+        query_conditions.append(f'接続方式 == "{cmeth}"')
+    if volt:
+        query_conditions.append(f'操作電圧 == "{volt}"')
+
+    # 条件を結合してクエリを作成
+    query_string = " and ".join(query_conditions)
+
+    # データフィルタリング
+    data_2k = data.query('得意先コード != 9999').copy()
     data_2k['受注金額'] = data_2k['数量'] * data_2k['単価']
     data_2k['変動費計'] = data_2k['数量'] * data_2k['材料外注計']
     data_2k['粗利益計'] = data_2k['受注金額'] - data_2k['変動費計']
 
-    data_3 = data_2k.query('(納期 >= @day1 and 納期 <= @day2) & (機種別 == @kishu)')
+    # 動的クエリに基づいてフィルタリング
+    data_3 = data_2k.query(query_string)
+
+    # 集計
     data_4 = data_3.groupby(['納期'])['数量'].sum().reset_index()
-    data_4['数量'] = data_4['数量'].astype('int')
     data_4 = data_4.rename(columns={'納期': 'date', '数量': 'value'})
 
+    # ベースデータ作成
     base_data = pd.DataFrame({'date': pd.date_range(day1, day2, freq='D')})
     data_base_1 = pd.merge(base_data, data_4, on='date', how='left')
     data_base_1['value'] = data_base_1['value'].fillna(0)
     data_base_1 = data_base_1.groupby([pd.to_datetime(data_base_1["date"]).dt.strftime("%Y-%m")]).value.sum().reset_index()
-    # 次の２行が修正code
-    #data_base_1 = data_base_1.groupby(pd.to_datetime(data_base_1["date"]).dt.to_period("M")).value.sum().reset_index()
-    #data_base_1['date'] = data_base_1['date'].dt.to_timestamp()
     data_base_1 = data_base_1.set_index('date')
     data_base_1['value'] = data_base_1['value'].astype('float')
-
-
+    
     return data_base_1
 
 
 
-def process_1_data(folder, day1, day2, kishu, bins):
+def process_1_data(folder, day1, day2, type, capacity, num, contact, cmeth, volt, bins):
+    data_base_1 = preprocess_data(folder, day1, day2, type, capacity, num, contact, cmeth, volt)
+    # kishuの作成
+    kishu = str(type) + str(capacity) + str(num) + str(contact) + str(cmeth) + str(volt)
 
-    data_base_1 = preprocess_data(folder, day1, day2, kishu)
-    
     # インデックスをリセットして日付を表示データに含める
     data_display_1 = data_base_1.copy().reset_index()
 
@@ -206,8 +223,11 @@ def process_1_data(folder, day1, day2, kishu, bins):
     return plot_file_11, plot_file_12, data_display_1, file_path_1
 
 
-def process_2_data(folder, day1, day2, kishu, bins):
-    data_base_1 = preprocess_data(folder, day1, day2, kishu)
+def process_2_data(folder, day1, day2, type, capacity, num, contact, cmeth, volt, bins):
+    data_base_1 = preprocess_data(folder, day1, day2, type, capacity, num, contact, cmeth, volt)
+
+    # kishuの作成
+    kishu = str(type) + str(capacity) + str(num) + str(contact) + str(cmeth) + str(volt)
 
     # データをコピー
     data_base_1_diff = data_base_1.copy()
@@ -299,8 +319,12 @@ def process_2_data(folder, day1, day2, kishu, bins):
 
 
 
-def process_3_data(folder, day1, day2, kishu, x_cson, test_size):
-    data_base_1 = preprocess_data(folder, day1, day2, kishu)
+def process_3_data(folder, day1, day2, type, capacity, num, contact, cmeth, volt, x_cson, test_size):
+    data_base_1 = preprocess_data(folder, day1, day2, type, capacity, num, contact, cmeth, volt)
+
+    # kishuの作成
+    kishu = str(type) + str(capacity) + str(num) + str(contact) + str(cmeth) + str(volt)
+
     data_base_5 = data_base_1.copy()
 
     # インデックスをリセットして日付を表示データに含める
@@ -363,7 +387,7 @@ def process_3_data(folder, day1, day2, kishu, x_cson, test_size):
     data_base_1_mat.index = pd.period_range(start=data_base_1_mat.index[0], periods=len(data_base_1_mat), freq='M')
     #data_base_1_mat.index = pd.period_range(start=data_base_1_mat.index[0], periods=len(data_base_1_mat), freq='M').to_timestamp()
 
-    #def x_cson(data_base_1_mat, train_data, test_data, X_cs):
+    
     X_cs = x_cson
 
     X_train = pd.DataFrame()
@@ -420,23 +444,6 @@ def process_3_data(folder, day1, day2, kishu, x_cson, test_size):
         # テストデータを結合
         X_test = pd.concat([Xa_test, Xc_test], axis=1)       
         
-    '''
-    # option_2 特微量は三角関数のみ
-    elif X_cs == "option2":
-        dp = DeterministicProcess(
-            train_data.index, constant=False, order=1, period=24, fourier=6
-        )
-        # 訓練データ
-        X_train = dp.in_sample()
-        # 訓練データの列名の変更
-        X_train.columns = ["trend_1"] + [f"seasonal_{x}" for x in range(6 * 2)]
-        # テストデータ
-        X_test = dp.out_of_sample(len(test_data))
-        # テストデータの列名の変更
-        X_test.columns = ["trend_1"] + [f"seasonal_{x}" for x in range(6 * 2)]
-    '''  
-
-    #return X_train, X_test
 
 
     # LightGBMのハイパーパラメータを設定
@@ -503,42 +510,7 @@ def process_3_data(folder, day1, day2, kishu, x_cson, test_size):
     # 評価指標の計算
     mae = mean_absolute_error(test_data, ma4_pred_ma)
     mase = mean_absolute_scaled_error(test_data, ma4_pred_ma, y_train=train_data)
-    '''
-    # 学習時に使った特徴量を含める
-    if X_cs == "option1":
-        long_term_exog_2 = X_test[['true_ma4_log', 'trend_log', 'value_log']].values
-    elif X_cs == "option2":
-        long_term_exog_2 = X_test[['trend_1'] + [f'seasonal_{i}' for i in range(12)]].values
-    elif X_cs == "option3":
-        long_term_exog_2 = X_test[['true_ma4_log', 'trend_log', 'value_log', 'trend_1'] + [f'seasonal_{i}' for i in range(12)]].values
     
-    future_index = pd.date_range(
-        start=test_data.index[-1].to_timestamp() + pd.offsets.MonthEnd(1),
-        periods=test_size,
-        freq='MS'
-    )
-
-    # 長期予測の値を格納するリスト
-    long_term_forecast_2 = []
-
-    # 長期予測を逐次生成する（range=24ヶ月分）
-    for i in range(test_size):
-        # 特徴量をモデルに入力して予測
-        forecast_value_2 = gbm_sk_data.predict(long_term_exog_2[i].reshape(1, -1))[0]
-        long_term_forecast_2.append(forecast_value_2)
-
-        # 次の特徴量を更新（未来データを生成）
-        if i < test_size -1:  # 次のステップが存在する場合のみ
-            long_term_exog_2[i + 1, 2] = forecast_value_2  # 'value' 列を更新
-
-    # 長期予測結果のデータフレームを作成
-    forecast_df = pd.DataFrame({
-        'Forecast': long_term_forecast_2  # 長期予測の値を列として設定
-    }, index=future_index)  # future_index をインデックスとして設定
-
-    # 必要に応じて、表示や出力時に PeriodIndex に変換　ケース２
-    forecast_df.index = forecast_df.index.to_period('M')
-    '''
     # 特微量を X_cs に応じて設定
     if X_cs == "option1":
         # value_log を先頭に配置
@@ -670,28 +642,7 @@ def process_3_data(folder, day1, day2, kishu, x_cson, test_size):
     plot_file_32 = "plot_32.png"  # ここでファイル名を定義
     plt.savefig(plot_file_32)
     plt.close()
-    '''
-    # future_indexをDatetimeIndexに変換s
-    jls_extract_var = to_timestamp
-    future_index = future_index.jls_extract_var()
-
-    # プロットの実行
-    plt.figure(figsize=(8, 4))
-    plt.plot(
-        future_index, long_term_forecast_2,
-        label='長期予測', linestyle='--', color='red'
-    )
-    plt.legend()
-    plt.title('長期予測の結果', fontsize=14)
-    plt.xlabel('年月', fontsize=12)
-    plt.ylabel('値', fontsize=12)
-    plt.xticks(rotation=0)
-
-    # グラフを保存
-    plot_file_32 = "plot_32.png"
-    plt.savefig(plot_file_32)
-    plt.close()
-    '''
+    
     # 予測図のEXCELへの挿入
     # Excelファイルを開く
     wb = load_workbook(file_path_3)
@@ -714,7 +665,8 @@ def process_3_data(folder, day1, day2, kishu, x_cson, test_size):
 
 
 # GPTによる応答生成（データをプロンプトに含める）
-def generate_gpt_response(folder, day1, day2, kishu, use_chatgpt, token, gpt_model, prompt):
+def generate_gpt_response(folder, day1, day2,
+                          type, capacity, num, contact, cmeth, volt, use_chatgpt, token, gpt_model, prompt):
 
     if not use_chatgpt:
         # ChatGPTを使用しない場合の処理
@@ -722,7 +674,10 @@ def generate_gpt_response(folder, day1, day2, kishu, use_chatgpt, token, gpt_mod
     
 
     # データを処理
-    data_base_11 = preprocess_data(folder, day1, day2, kishu)
+    data_base_11 = preprocess_data(folder, day1, day2, type, capacity, num, contact, cmeth, volt)
+    # kishuの作成
+    kishu = str(type) + str(capacity) + str(num) + str(contact) + str(cmeth) + str(volt)
+
     data_display_1c = data_base_11.copy()
     data_display_1c = data_display_1c.reset_index()
 
@@ -747,12 +702,12 @@ def generate_gpt_response(folder, day1, day2, kishu, use_chatgpt, token, gpt_mod
         today = datetime.now().strftime("%Y-%m-%d")
 
         # 一時ファイルを作成（ローカルで行う場合）
-        #tmp_dir = tempfile.gettempdir()
-        #file_path_cat_1 = f"{tmp_dir}\\ChatGPT_{kishu}.docx"
+        tmp_dir = tempfile.gettempdir()
+        file_path_cat_1 = f"{tmp_dir}\\ChatGPT_{kishu}.docx"
         
         # 一時ファイルを作成（外部で行う場合）
-        tmp_dir = "/tmp"
-        file_path_cat_1 = os.path.join(tmp_dir, f"ChatGPT_{kishu}.docx")
+        #tmp_dir = "/tmp"
+        #file_path_cat_1 = os.path.join(tmp_dir, f"ChatGPT_{kishu}.docx")
             
         print(f"ファイルが作成されました: {file_path_cat_1}")
 
@@ -781,6 +736,7 @@ def create_interface():
         with gr.Row():
             # 左側の入力列
             with gr.Column(scale=1):
+                gr.Markdown("Var.4.2_20250209")  # ヘッダーを追加
                 folder_input = gr.File(label="CSVファイルをアップロード", file_types=[".csv"])
 
                 # 開始日と終了日を横並びに配置
@@ -797,27 +753,44 @@ def create_interface():
                     )
 
                 # ここでupdate_dropdown関数を定義
-                kishu_input = gr.Textbox(label="機種別 (kishu)", value="TGMEs10")
-                '''
-                kishu_input = gr.Dropdown(
-                    choices=choices_list,       # 選択肢をリストで指定
-                    value="TGMEs10",           # 初期選択値
-                    label="機種を選択",   # ラベル
-                    interactive=True,           # インタラクティブに設定
-                    multiselect=False           # 単一選択モード
-                )
+                #kishu_input = gr.Textbox(label="機種別 (kishu)", value="TGMEs10")
+                # パラメータ入力エリア
+                with gr.Row():
+                    with gr.Column():
+                        # 1行目: 型式・容量
+                        with gr.Row():
+                            type_toggle = gr.Checkbox(label="型式を指定する", value=True)
+                            type_input = gr.Textbox(label="型式 (type)", value="TGMEs", interactive=True)
 
-                def update_dropdown(file):
-                    unique_kishu = extract_unique_kishu(file)
-                    return gr.Dropdown.update(choices=unique_kishu)
+                            capacity_toggle = gr.Checkbox(label="容量を指定する", value=True)
+                            capacity_input = gr.Number(label="容量 (capacity)", value=10, interactive=True)
 
-                # ファイルがアップロードされたときにドロップダウンを更新
-                file_input.change(
-                    fn=update_dropdown,  # ドロップダウン更新関数
-                    inputs=file_input,   # 入力（ファイル）
-                    outputs=kishu_input  # 出力（ドロップダウン）
-                )
-                '''
+                        # 2行目: 極数・接点構成
+                        with gr.Row():
+                            num_toggle = gr.Checkbox(label="極数を指定する", value=False)
+                            num_input = gr.Number(label="極数 (num)", value=None, interactive=False)
+
+                            contact_toggle = gr.Checkbox(label="接点構成を指定する", value=False)
+                            contact_input = gr.Textbox(label="接点構成 (contact)", value="", interactive=False)
+
+                            cmeth_toggle = gr.Checkbox(label="接続方式を指定する", value=False)
+                            cmeth_input = gr.Textbox(label="接続方式 (cmeth)", value="", interactive=False)
+
+                            volt_toggle = gr.Checkbox(label="操作電圧を指定する", value=False)
+                            volt_input = gr.Textbox(label="操作電圧 (volt)", value="", interactive=False)
+
+                # トグルボタンで入力の有効/無効を切り替えるロジック
+                def toggle_inputs(toggle, current_value):
+                    return gr.update(interactive=toggle, value=current_value if toggle else None)
+
+                # トグルの変更イベントを登録
+                type_toggle.change(toggle_inputs, inputs=[type_toggle, type_input], outputs=type_input)
+                capacity_toggle.change(toggle_inputs, inputs=[capacity_toggle, capacity_input], outputs=capacity_input)
+                num_toggle.change(toggle_inputs, inputs=[num_toggle, num_input], outputs=num_input)
+                contact_toggle.change(toggle_inputs, inputs=[contact_toggle, contact_input], outputs=contact_input)
+                cmeth_toggle.change(toggle_inputs, inputs=[cmeth_toggle, cmeth_input], outputs=cmeth_input)
+                volt_toggle.change(toggle_inputs, inputs=[volt_toggle, volt_input], outputs=volt_input)
+
                 x_cson_input = gr.Dropdown(
                     label="特徴量選択",
                     choices=["option1", "option2", "option3"],
@@ -903,25 +876,31 @@ def create_interface():
         # ボタンのクリック処理
         button_1.click(
             fn=process_1_data,
-            inputs=[folder_input, day1_input, day2_input, kishu_input, bins_input],
+            inputs=[folder_input, day1_input, day2_input,
+                    type_input, capacity_input, num_input, contact_input, cmeth_input, volt_input, bins_input],
             outputs=[plot_output_1, plot_output_2, data_output, file_download],
         )
         
         button_2.click(
             fn=process_2_data,
-            inputs=[folder_input, day1_input, day2_input, kishu_input, bins_input],
+            inputs=[folder_input, day1_input, day2_input,
+                    type_input, capacity_input, num_input, contact_input, cmeth_input, volt_input, bins_input],
             outputs=[plot_output_1, plot_output_2, data_output, file_download],
         )
 
         button_3.click(
             fn=process_3_data,
-            inputs=[folder_input, day1_input, day2_input, kishu_input, x_cson_input, test_size_input],
+            inputs=[folder_input, day1_input, day2_input,
+                    type_input, capacity_input, num_input, contact_input, cmeth_input, volt_input,
+                    x_cson_input, test_size_input],
             outputs=[plot_output_1, plot_output_2, data_output, file_download],
         )
 
         chatgpt_button.click(
             fn=generate_gpt_response,
-            inputs=[folder_input, day1_input, day2_input, kishu_input, use_chatgpt_toggle, token_input, gpt_model_input, prompt_input],
+            inputs=[folder_input, day1_input, day2_input,
+                    type_input, capacity_input, num_input, contact_input, cmeth_input, volt_input,
+                    use_chatgpt_toggle, token_input, gpt_model_input, prompt_input],
             outputs=[file_download_2]
         )
 
