@@ -702,12 +702,12 @@ def generate_gpt_response(folder, day1, day2,
         today = datetime.now().strftime("%Y-%m-%d")
 
         # 一時ファイルを作成（ローカルで行う場合）
-        tmp_dir = tempfile.gettempdir()
-        file_path_cat_1 = f"{tmp_dir}\\ChatGPT_{kishu}.docx"
+        #tmp_dir = tempfile.gettempdir()
+        #file_path_cat_1 = f"{tmp_dir}\\ChatGPT_{kishu}.docx"
         
         # 一時ファイルを作成（外部で行う場合）
-        #tmp_dir = "/tmp"
-        #file_path_cat_1 = os.path.join(tmp_dir, f"ChatGPT_{kishu}.docx")
+        tmp_dir = "/tmp"
+        file_path_cat_1 = os.path.join(tmp_dir, f"ChatGPT_{kishu}.docx")
             
         print(f"ファイルが作成されました: {file_path_cat_1}")
 
